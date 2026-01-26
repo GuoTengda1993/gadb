@@ -358,3 +358,76 @@ func (d Device) LogcatClear() error {
 	_, err := d.executeCommand("shell:logcat -c")
 	return err
 }
+
+// monkey test once
+func (d Device) Monkey(dst io.Writer, logLevel, times int, params map[string]string) error {
+	var tp transport
+	var err error
+	if tp, err = d.createDeviceTransport(); err != nil {
+		return err
+	}
+	defer func() { _ = tp.Close() }()
+
+	pList := make([]string, 0)
+	if len(params) > 0 {
+		for k, v := range params {
+			if !strings.HasPrefix(k, "-") {
+				if len(k) == 1 {
+					k = "-" + k
+				} else {
+					k = "--" + k
+				}
+			}
+			pList = append(pList, k)
+			if v != "" {
+				pList = append(pList, v)
+			}
+		}
+	}
+	switch logLevel {
+	case 0:
+		pList = append(pList, "-v")
+	case 1:
+		pList = append(pList, "-v -v")
+	case 2:
+		pList = append(pList, "-v -v -v")
+	default:
+		pList = append(pList, "-v")
+	}
+
+	ppp := strings.Join(pList, " ")
+	cmd := fmt.Sprintf("shell:monkey %s %d", ppp, times)
+	if err = tp.Send(cmd); err != nil {
+		return err
+	}
+	if err = tp.VerifyResponse(); err != nil {
+		return err
+	}
+	r := NewReader(context.TODO(), tp.sock)
+	io.Copy(dst, r)
+	return nil
+}
+
+// Run the Monkey test for some time (duration, seconds)
+func (d Device) MonkeyRun(logfile string, duration int64, stopChan chan bool, logLevel int, params map[string]string) error {
+	f, err := os.OpenFile(logfile, os.O_WRONLY|os.O_CREATE|os.O_SYNC|os.O_APPEND, 0755)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	startTime := time.Now().Unix()
+	for {
+		select {
+		case <-stopChan:
+			return nil
+		default:
+			if time.Now().Unix()-startTime >= duration {
+				return nil
+			}
+			// The 120 operations limit is set to avoid excessive duration for each Monkey test run.
+			if err = d.Monkey(f, logLevel, 120, params); err != nil {
+				return err
+			}
+		}
+	}
+}
